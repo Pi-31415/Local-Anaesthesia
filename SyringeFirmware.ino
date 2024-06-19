@@ -13,7 +13,7 @@
 #include <utility/imumaths.h>
 
 /* Set the delay between fresh samples */
-uint16_t BNO055_SAMPLERATE_DELAY_MS = 50;
+uint16_t BNO055_SAMPLERATE_DELAY_MS = 10;
 
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);
 
