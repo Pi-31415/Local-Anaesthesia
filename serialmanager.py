@@ -29,11 +29,12 @@ Methods:
     display_results: Displays the detection results of connected devices in the GUI.
 """
 
+
 import tkinter as tk
 from tkinter import ttk
 import serial
 import serial.tools.list_ports
-from threading import Thread
+from threading import Thread, Event
 import socket
 import time
 
@@ -45,20 +46,23 @@ class SerialApp(tk.Tk):
         self.udp_ip = udp_ip
         self.udp_port = udp_port
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.device_status = {"Syringe": None, "Cheek Retractor": None}  # Track device status
+        self.device_status = {"Syringe": None, "Cheek Retractor": None}
+        self.continuous_read_threads = []
+        self.shutdown_event = Event()  # Shutdown flag
         self.init_ui()
         self.log("App started...")
-        self.continuous_read_threads = []
-        self.active_threads = []
 
     def init_ui(self):
-        self.info_label = tk.Label(self, text="Local Anastetia Simulation Device Manager\nby AIMLAB, NYU Abu Dhabi.\nProgrammer: Pi Ko (pi.ko@nyu.edu).\n\nConnect both devices then click scan. It will send data to Unity automatically.", font=("Helvetica", 10), wraplength=400)
+        self.info_label = tk.Label(self, text="Local Anastetia Simulation Device Manager\nby AIMLAB, NYU Abu Dhabi.\nProgrammer: Pi Ko (pi.ko@nyu.edu).\n\nConnect both devices then click scan. It will send data to Unity automatically.", font=("Helvetica", 12), wraplength=400)
         self.info_label.pack(pady=(10, 0))
         
         self.scan_button = ttk.Button(self, text="Scan", command=self.scan_devices)
-        self.scan_button.pack(pady=20)
+        self.scan_button.pack(pady=5)
         
-        self.result_label = tk.Label(self, text="", font=("Helvetica", 16))
+        self.quit_button = ttk.Button(self, text="Disconnect and Quit", command=self.quit_app)
+        self.quit_button.pack(pady=5)
+        
+        self.result_label = tk.Label(self, text="", font=("Helvetica", 11))
         self.result_label.pack(pady=10)
         
         self.data_text = tk.Text(self, height=10, width=70)
@@ -67,6 +71,15 @@ class SerialApp(tk.Tk):
     def log(self, message):
         self.data_text.insert(tk.END, message + "\n")
         self.data_text.see(tk.END)
+        
+    def quit_app(self):
+        self.shutdown_event.set()  # Signal all threads to stop
+        for thread in self.continuous_read_threads:
+            if thread.is_alive():
+                thread.join(timeout=1)  # Ensure all threads have stopped
+        self.udp_socket.close()  # Close the UDP socket only after all threads have stopped
+        self.log("Application is closing...")
+        self.destroy()  # Safely close the GUI
 
     def scan_devices(self):
         self.log("Scanning devices...")
@@ -113,27 +126,27 @@ class SerialApp(tk.Tk):
         thread.start()
         self.continuous_read_threads.append(thread)
 
-  
     def continuous_read(self, port):
-        buffer = ""  # Initialize an empty buffer
+        buffer = ""
         try:
             with serial.Serial(port, 115200, timeout=1) as ser:
-                first_message = True
-                while True:
+                while not self.shutdown_event.is_set():  # Check if it's okay to continue
                     if ser.in_waiting > 0:
                         data = ser.read(ser.in_waiting).decode('utf-8', errors='replace')
-                        buffer += data  # Append new data to the buffer
-                        lines = buffer.split('\n')  # Split buffer into lines
-                        buffer = lines.pop()  # Keep the last partial line in the buffer
-
-                        for line in lines:  # Process complete lines
+                        buffer += data
+                        lines = buffer.split('\n')
+                        buffer = lines.pop()
+                        for line in lines:
                             if line.startswith("Quat") or line.startswith("Cheek"):
                                 self.udp_socket.sendto(line.encode(), (self.udp_ip, self.udp_port))
-                                if first_message:
-                                    self.log(f"Sending data to Unity from {port}...")
-                                    first_message = False
         except Exception as e:
-            self.log(f"Error with continuous read {port}: {str(e)}")
+            self.safe_log(f"Error with continuous read {port}: {str(e)}")
+
+    def safe_log(self, message):
+        if not self.shutdown_event.is_set():  # Ensure GUI is still up before logging
+            self.data_text.insert(tk.END, message + "\n")
+            self.data_text.see(tk.END)
+    
     def display_results(self):
         result_text = ""
         if self.device_status["Syringe"]:
